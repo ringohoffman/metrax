@@ -72,6 +72,41 @@ class WandbBackendTest(absltest.TestCase):
         WandbBackend(project="test-project")
       self.assertIn("pip install wandb", str(cm.exception))
 
+  def test_define_metric_called_when_sync_tensorboard_true(self):
+    """Tests that define_metric is called with global_step when sync_tensorboard=True."""
+    with mock.patch("jax.process_index", return_value=0), mock.patch(
+        "metrax.logging.wandb_backend.datetime", self.mock_datetime
+    ), mock.patch(
+        "builtins.__import__", side_effect=self._mock_successful_import
+    ):
+      WandbBackend(project="test-project", sync_tensorboard=True)
+      self.mock_wandb.define_metric.assert_called_once_with(
+          "*", step_metric="global_step"
+      )
+
+  def test_define_metric_not_called_without_sync_tensorboard(self):
+    """Tests that define_metric is NOT called when sync_tensorboard is not set."""
+    with mock.patch("jax.process_index", return_value=0), mock.patch(
+        "metrax.logging.wandb_backend.datetime", self.mock_datetime
+    ), mock.patch(
+        "builtins.__import__", side_effect=self._mock_successful_import
+    ):
+      WandbBackend(project="test-project")
+      self.mock_wandb.define_metric.assert_not_called()
+
+  def test_global_step_injected_when_sync_tensorboard_true(self):
+    """Tests that global_step is injected into the logged dict when sync_tensorboard=True."""
+    with mock.patch("jax.process_index", return_value=0), mock.patch(
+        "metrax.logging.wandb_backend.datetime", self.mock_datetime
+    ), mock.patch(
+        "builtins.__import__", side_effect=self._mock_successful_import
+    ):
+      backend = WandbBackend(project="test-project", sync_tensorboard=True)
+      backend.log_scalar("/myevent", 123.45, step=50)
+      self.mock_wandb.log.assert_called_once_with(
+          {"myevent": 123.45, "global_step": 50}, step=50
+      )
+
 
 if __name__ == "__main__":
   absltest.main()

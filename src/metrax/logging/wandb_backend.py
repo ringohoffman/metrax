@@ -53,12 +53,17 @@ class WandbBackend:
           "'pip install wandb' to use the WandbBackend."
       ) from e
     self.wandb = wandb
+    self._sync_tensorboard = False
 
-    run_name = name or datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    wandb.init(project=project, name=run_name, anonymous="allow", **kwargs)
+    wandb.init(project=project, anonymous="allow", **kwargs)
     if wandb.run:
       logging.info("W&B run URL: %s", wandb.run.url)
       self._is_active = True
+      # When syncing TensorBoard logs to wandb, set global_step as the default
+      # x-axis for all metrics so wandb charts align with the TB step counter.
+      self._sync_tensorboard = kwargs.get("sync_tensorboard", False)
+      if self._sync_tensorboard:
+        wandb.define_metric("*", step_metric="global_step")
     else:
       self._is_active = False
 
