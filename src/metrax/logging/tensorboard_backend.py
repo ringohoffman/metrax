@@ -57,11 +57,12 @@ class TensorboardBackend:
     current_step = _get_step(kwargs)
     event_name = _preprocess_event_name(event)
     self._writer.add_scalar(event_name, value, current_step)
-    if current_step % self._flush_every_n_steps == 0:
-      now = time.time()
-      if (now - self._last_flush_time) >= self._flush_interval_s:
-        self._writer.flush()
-        self._last_flush_time = now
+    now = time.time()
+    if (current_step % self._flush_every_n_steps == 0) or (
+        (now - self._last_flush_time) >= self._flush_interval_s
+    ):
+      self._writer.flush()
+      self._last_flush_time = now
 
   def close(self):
     if self._writer:
