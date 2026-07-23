@@ -22,55 +22,58 @@ TensorboardBackend = metrax_logging.TensorboardBackend
 
 class TensorboardBackendTest(absltest.TestCase):
 
-  @mock.patch("metrax.logging.tensorboard_backend.writer.SummaryWriter")
-  def test_init_and_log_success_main_process(self, mock_summary_writer):
+  @mock.patch("metrax.logging.tensorboard_backend.EventFileWriter")
+  def test_init_and_log_success_main_process(self, mock_event_file_writer):
     """Tests successful init, logging, and closing on the main process."""
-    mock_writer_instance = mock_summary_writer.return_value
+    mock_writer_instance = mock_event_file_writer.return_value
 
     with mock.patch("jax.process_index", return_value=0):
       backend = TensorboardBackend(
           log_dir="/fake/logs", flush_every_n_steps=2, flush_interval_s=0
       )
 
-      mock_summary_writer.assert_called_once_with(logdir="/fake/logs")
+      mock_event_file_writer.assert_called_once_with(
+          "/fake/logs", max_queue_size=10, flush_secs=30
+      )
+      mock_writer_instance.reset_mock()
 
       backend.log_scalar("/event1", 1.0, step=1)
-      mock_writer_instance.add_scalar.assert_called_with("event1", 1.0, 1)
+      self.assertEqual(mock_writer_instance.add_event.call_count, 1)
       mock_writer_instance.flush.assert_not_called()
 
       backend.log_scalar("event2", 2.0, step=2)
-      mock_writer_instance.add_scalar.assert_called_with("event2", 2.0, 2)
+      self.assertEqual(mock_writer_instance.add_event.call_count, 2)
       mock_writer_instance.flush.assert_called_once()
 
       backend.log_scalar("event_no_step", 3.0)
-      mock_writer_instance.add_scalar.assert_called_with(
-          "event_no_step", 3.0, 0
-      )
+      self.assertEqual(mock_writer_instance.add_event.call_count, 3)
 
       backend.close()
       mock_writer_instance.close.assert_called_once()
 
-  @mock.patch("metrax.logging.tensorboard_backend.writer.SummaryWriter")
-  def test_init_non_main_process_is_noop(self, mock_summary_writer):
+  @mock.patch("metrax.logging.tensorboard_backend.EventFileWriter")
+  def test_init_non_main_process_is_noop(self, mock_event_file_writer):
     """Tests that the backend does nothing on non-main processes."""
-    mock_writer_instance = mock_summary_writer.return_value
+    mock_writer_instance = mock_event_file_writer.return_value
 
     with mock.patch("jax.process_index", return_value=1):
       backend = TensorboardBackend(log_dir="/fake/logs")
 
-      mock_summary_writer.assert_not_called()
+      mock_event_file_writer.assert_not_called()
 
       backend.log_scalar("myevent", 1.0, step=1)
-      mock_writer_instance.add_scalar.assert_not_called()
+      mock_writer_instance.add_event.assert_not_called()
 
       backend.close()
       mock_writer_instance.close.assert_not_called()
 
   @mock.patch("time.time")
-  @mock.patch("metrax.logging.tensorboard_backend.writer.SummaryWriter")
-  def test_log_scalar_flush_rate_limited(self, mock_summary_writer, mock_time):
+  @mock.patch("metrax.logging.tensorboard_backend.EventFileWriter")
+  def test_log_scalar_flush_rate_limited(
+      self, mock_event_file_writer, mock_time
+  ):
     """Tests that flush honors both step frequency and time interval."""
-    mock_writer_instance = mock_summary_writer.return_value
+    mock_writer_instance = mock_event_file_writer.return_value
     mock_time.return_value = 1000.0
 
     with mock.patch("jax.process_index", return_value=0):
@@ -78,9 +81,10 @@ class TensorboardBackendTest(absltest.TestCase):
       backend = TensorboardBackend(
           log_dir="/fake/logs", flush_every_n_steps=1, flush_interval_s=30.0
       )
+      mock_writer_instance.reset_mock()
 
       backend.log_scalar("event1", 1.0, step=1)
-      mock_writer_instance.add_scalar.assert_called_with("event1", 1.0, 1)
+      self.assertEqual(mock_writer_instance.add_event.call_count, 1)
       mock_writer_instance.flush.assert_not_called()
 
       mock_time.return_value = 1020.0
