@@ -302,6 +302,81 @@ class TensorboardBackend:
         description=description,
     )
 
+  def add_roc_curve(
+      self,
+      tag: str,
+      labels: np.ndarray,
+      predictions: np.ndarray,
+      *,
+      step: int = 0,
+      num_thresholds: int = 201,
+      weights: np.ndarray | float | None = None,
+      display_name: str | None = None,
+      description: str | None = None,
+  ) -> None:
+    """Writes an ROC curve summary (TPR on Y-axis, FPR on X-axis) to TensorBoard.
+
+    Repurposes TensorBoard's PR curve visualization plugin by mapping:
+      - X-axis (Recall slot) -> False Positive Rate (FPR)
+      - Y-axis (Precision slot) -> True Positive Rate (TPR / Recall)
+
+    Args:
+      tag: A name for the generated summary.
+      labels: Ground truth binary labels (convertible to boolean numpy array).
+      predictions: Prediction scores / probabilities in [0, 1].
+      step: Global step value.
+      num_thresholds: Number of thresholds evenly distributed in [0, 1].
+      weights: Optional weighting for each example.
+      display_name: Optional display name in TensorBoard.
+      description: Optional markdown description.
+    """
+    if self._writer is None:
+      return
+
+    labels_arr = np.asarray(labels, dtype=bool)
+    preds_arr = np.asarray(predictions, dtype=np.float32)
+
+    if weights is None:
+      weights = 1.0
+
+    bucket_indices = np.int32(np.floor(preds_arr * (num_thresholds - 1)))
+    bucket_indices = np.clip(bucket_indices, 0, num_thresholds - 1)
+    float_labels = labels_arr.astype(float)
+    histogram_range = (0, num_thresholds - 1)
+    tp_buckets, _ = np.histogram(
+        bucket_indices,
+        bins=num_thresholds,
+        range=histogram_range,
+        weights=float_labels * weights,
+    )
+    fp_buckets, _ = np.histogram(
+        bucket_indices,
+        bins=num_thresholds,
+        range=histogram_range,
+        weights=(1.0 - float_labels) * weights,
+    )
+
+    tp = np.cumsum(tp_buckets[::-1])[::-1]
+    fp = np.cumsum(fp_buckets[::-1])[::-1]
+    tn = fp[0] - fp
+    fn = tp[0] - tp
+    tpr = tp / np.maximum(1e-7, tp + fn)
+    fpr = fp / np.maximum(1e-7, fp + tn)
+
+    self.add_pr_curve_raw(
+        tag=tag,
+        true_positive_counts=tp,
+        false_positive_counts=fp,
+        true_negative_counts=tn,
+        false_negative_counts=fn,
+        precision=tpr,
+        recall=fpr,
+        step=step,
+        num_thresholds=num_thresholds,
+        display_name=display_name,
+        description=description,
+    )
+
   def flush(self):
     if self._writer:
       self._writer.flush()

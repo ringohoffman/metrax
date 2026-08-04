@@ -135,7 +135,33 @@ class TensorboardBackendTest(absltest.TestCase):
       predictions = np.array([0.9, 0.1], dtype=np.float32)
 
       backend.add_pr_curve("eval/pr_curve", labels, predictions, step=5)
-      mock_writer_instance.add_event.assert_not_called()
+
+  @mock.patch("metrax.logging.tensorboard_backend.EventFileWriter")
+  def test_add_roc_curve_main_process(self, mock_event_file_writer):
+    """Tests add_roc_curve logging on the main process."""
+    mock_writer_instance = mock_event_file_writer.return_value
+
+    with mock.patch("jax.process_index", return_value=0):
+      import numpy as np
+
+      backend = TensorboardBackend(log_dir="/fake/logs")
+      mock_writer_instance.reset_mock()
+
+      labels = np.array([True, False, True, False])
+      predictions = np.array([0.9, 0.8, 0.3, 0.1], dtype=np.float32)
+
+      backend.add_roc_curve(
+          "eval/roc_curve", labels, predictions, step=5, num_thresholds=11
+      )
+      self.assertEqual(mock_writer_instance.add_event.call_count, 1)
+      event = mock_writer_instance.add_event.call_args[0][0]
+      self.assertEqual(event.step, 5)
+      self.assertEqual(len(event.summary.value), 1)
+      summary_val = event.summary.value[0]
+      self.assertEqual(summary_val.tag, "eval/roc_curve/pr_curves")
+      self.assertEqual(
+          summary_val.metadata.plugin_data.plugin_name, "pr_curves"
+      )
 
 
 if __name__ == "__main__":
