@@ -384,3 +384,4 @@ class TensorboardBackend:
   def close(self):
     if self._writer:
       self._writer.close()
+      self._writer = None
