@@ -14,7 +14,6 @@
 
 """Metrax LoggingBackend implementation for Tensorboard."""
 
-import os
 import time
 from typing import Any
 
@@ -23,7 +22,11 @@ import jax
 import numpy as np
 from tensorboard.compat.proto import event_pb2
 from tensorboard.compat.proto import summary_pb2
+from tensorboard.compat.proto import tensor_pb2
+from tensorboard.compat.proto import tensor_shape_pb2
+from tensorboard.compat.proto import types_pb2
 from tensorboard.plugins.hparams import summary_v2 as hp_summary
+from tensorboard.plugins.pr_curve import metadata as pr_curve_metadata
 from tensorboard.plugins.text import metadata as text_metadata
 from tensorboard.summary.writer.event_file_writer import EventFileWriter
 
@@ -149,9 +152,6 @@ class TensorboardBackend:
     """Write a text summary into the same event file."""
     if self._writer is None:
       return
-    from tensorboard.compat.proto import tensor_pb2
-    from tensorboard.compat.proto import tensor_shape_pb2
-    from tensorboard.compat.proto import types_pb2
 
     tensor = tensor_pb2.TensorProto(
         dtype=types_pb2.DT_STRING,
@@ -168,6 +168,139 @@ class TensorboardBackend:
     )
     ev = event_pb2.Event(wall_time=time.time(), step=step, summary=summary)
     self._writer.add_event(ev)
+
+  def add_pr_curve_raw(
+      self,
+      tag: str,
+      true_positive_counts: np.ndarray,
+      false_positive_counts: np.ndarray,
+      true_negative_counts: np.ndarray,
+      false_negative_counts: np.ndarray,
+      precision: np.ndarray,
+      recall: np.ndarray,
+      *,
+      step: int = 0,
+      num_thresholds: int | None = None,
+      display_name: str | None = None,
+      description: str | None = None,
+  ) -> None:
+    """Writes a raw precision-recall curve summary to the event file."""
+    if self._writer is None:
+      return
+
+    data = np.stack((
+        true_positive_counts,
+        false_positive_counts,
+        true_negative_counts,
+        false_negative_counts,
+        precision,
+        recall,
+    )).astype(np.float32)
+
+    if num_thresholds is None:
+      num_thresholds = data.shape[1]
+
+    display_name = display_name if display_name is not None else tag
+    meta = pr_curve_metadata.create_summary_metadata(
+        display_name=display_name,
+        description=description or "",
+        num_thresholds=num_thresholds,
+    )
+
+    tensor = tensor_pb2.TensorProto(
+        dtype=types_pb2.DT_FLOAT,
+        tensor_shape=tensor_shape_pb2.TensorShapeProto(
+            dim=[
+                tensor_shape_pb2.TensorShapeProto.Dim(size=s)
+                for s in data.shape
+            ]
+        ),
+        tensor_content=data.tobytes(),
+    )
+
+    full_tag = f"{tag}/pr_curves" if not tag.endswith("/pr_curves") else tag
+    summary = summary_pb2.Summary(
+        value=[
+            summary_pb2.Summary.Value(
+                tag=full_tag,
+                metadata=meta,
+                tensor=tensor,
+            )
+        ]
+    )
+    ev = event_pb2.Event(wall_time=time.time(), step=step, summary=summary)
+    self._writer.add_event(ev)
+
+  def add_pr_curve(
+      self,
+      tag: str,
+      labels: np.ndarray,
+      predictions: np.ndarray,
+      *,
+      step: int = 0,
+      num_thresholds: int = 201,
+      weights: np.ndarray | float | None = None,
+      display_name: str | None = None,
+      description: str | None = None,
+  ) -> None:
+    """Writes a precision-recall curve summary to the event file.
+
+    Args:
+      tag: A name for the generated summary.
+      labels: Ground truth binary labels (convertible to boolean numpy array).
+      predictions: Prediction scores / probabilities in [0, 1].
+      step: Global step value.
+      num_thresholds: Number of thresholds evenly distributed in [0, 1].
+      weights: Optional weighting for each example.
+      display_name: Optional display name in TensorBoard.
+      description: Optional markdown description.
+    """
+    if self._writer is None:
+      return
+
+    labels_arr = np.asarray(labels, dtype=bool)
+    preds_arr = np.asarray(predictions, dtype=np.float32)
+
+    if weights is None:
+      weights = 1.0
+
+    bucket_indices = np.int32(np.floor(preds_arr * (num_thresholds - 1)))
+    bucket_indices = np.clip(bucket_indices, 0, num_thresholds - 1)
+    float_labels = labels_arr.astype(float)
+    histogram_range = (0, num_thresholds - 1)
+    tp_buckets, _ = np.histogram(
+        bucket_indices,
+        bins=num_thresholds,
+        range=histogram_range,
+        weights=float_labels * weights,
+    )
+    fp_buckets, _ = np.histogram(
+        bucket_indices,
+        bins=num_thresholds,
+        range=histogram_range,
+        weights=(1.0 - float_labels) * weights,
+    )
+
+    tp = np.cumsum(tp_buckets[::-1])[::-1]
+    fp = np.cumsum(fp_buckets[::-1])[::-1]
+    tn = fp[0] - fp
+    fn = tp[0] - tp
+    precision = tp / np.maximum(1e-7, tp + fp)
+    recall = tp / np.maximum(1e-7, tp + fn)
+
+    self.add_pr_curve_raw(
+        tag=tag,
+        true_positive_counts=tp,
+        false_positive_counts=fp,
+        true_negative_counts=tn,
+        false_negative_counts=fn,
+        precision=precision,
+        recall=recall,
+        step=step,
+        num_thresholds=num_thresholds,
+        display_name=display_name,
+        description=description,
+    )
 
   def flush(self):
     if self._writer:

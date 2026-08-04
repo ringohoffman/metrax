@@ -95,6 +95,48 @@ class TensorboardBackendTest(absltest.TestCase):
       backend.log_scalar("event3", 3.0, step=3)
       mock_writer_instance.flush.assert_called_once()
 
+  @mock.patch("metrax.logging.tensorboard_backend.EventFileWriter")
+  def test_add_pr_curve_main_process(self, mock_event_file_writer):
+    """Tests add_pr_curve logging on the main process."""
+    mock_writer_instance = mock_event_file_writer.return_value
+
+    with mock.patch("jax.process_index", return_value=0):
+      import numpy as np
+
+      backend = TensorboardBackend(log_dir="/fake/logs")
+      mock_writer_instance.reset_mock()
+
+      labels = np.array([True, False, True, False])
+      predictions = np.array([0.9, 0.8, 0.3, 0.1], dtype=np.float32)
+
+      backend.add_pr_curve(
+          "eval/pr_curve", labels, predictions, step=5, num_thresholds=11
+      )
+      self.assertEqual(mock_writer_instance.add_event.call_count, 1)
+      event = mock_writer_instance.add_event.call_args[0][0]
+      self.assertEqual(event.step, 5)
+      self.assertEqual(len(event.summary.value), 1)
+      summary_val = event.summary.value[0]
+      self.assertEqual(summary_val.tag, "eval/pr_curve/pr_curves")
+      self.assertEqual(
+          summary_val.metadata.plugin_data.plugin_name, "pr_curves"
+      )
+
+  @mock.patch("metrax.logging.tensorboard_backend.EventFileWriter")
+  def test_add_pr_curve_non_main_process_is_noop(self, mock_event_file_writer):
+    """Tests add_pr_curve does nothing on non-main processes."""
+    mock_writer_instance = mock_event_file_writer.return_value
+
+    with mock.patch("jax.process_index", return_value=1):
+      import numpy as np
+
+      backend = TensorboardBackend(log_dir="/fake/logs")
+      labels = np.array([True, False])
+      predictions = np.array([0.9, 0.1], dtype=np.float32)
+
+      backend.add_pr_curve("eval/pr_curve", labels, predictions, step=5)
+      mock_writer_instance.add_event.assert_not_called()
+
 
 if __name__ == "__main__":
   absltest.main()
